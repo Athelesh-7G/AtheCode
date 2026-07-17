@@ -18,6 +18,7 @@ members = [
     "crates/codegen/xai-grok-agent",
     "crates/codegen/xai-grok-announcements",
     "crates/codegen/xai-grok-auth",
+    "crates/codegen/xai-grok-bedrock",
     "crates/codegen/xai-grok-config",
     "crates/codegen/xai-grok-config-types",
     "crates/codegen/xai-grok-env",
@@ -106,6 +107,8 @@ async-lsp = { version = "0.2.3", features = ["tokio", "tracing"] }
 async-openai = { version = "0.33.0", features = ["responses"] }
 async-stream = "0.3"
 async-trait = "0.1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-bedrockruntime = "1"
 axum = { version = "0.8", features = ["macros", "ws"] }
 backon = { version = "1.6" }
 backtrace = "0.3"
