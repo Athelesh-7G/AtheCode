@@ -24,8 +24,8 @@ use xai_grok_sampling_types::error::{parse_error_bytes, try_parse_stream_error};
 use xai_grok_sampling_types::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ConversationRequest,
     ConversationResponse, CreateResponseWrapper, DOOM_LOOP_CHECK_HEADER, MessagesRequestWrapper,
-    ResponseModelMetadata, Result, SamplingError, build_messages_request, is_check_event, messages,
-    rs,
+    ResponseModelMetadata, Result, SamplingBackend, SamplingError, SamplingEvent,
+    build_messages_request, is_check_event, messages, rs,
 };
 
 use crate::config::{AuthScheme, OriginClientInfo, SamplerConfig};
@@ -2004,6 +2004,54 @@ impl SamplingClient {
                 retry_after_secs: info.retry_after_secs,
                 should_retry: None,
             })
+    }
+}
+
+/// Additive `SamplingBackend` implementation for the xAI client.
+///
+/// This is a thin adapter over the existing conversation-oriented
+/// methods — it introduces no new request/response conversion logic:
+///
+/// - [`Self::chat_completion`] delegates to [`SamplingClient::conversation_collect`],
+///   which already dispatches on [`ApiBackend`], drives the matching L2
+///   transform, and collects into a [`ConversationResponse`].
+/// - [`Self::chat_completion_stream`] mirrors that same backend dispatch
+///   but boxes the L2 [`SamplingEvent`] stream instead of collecting it.
+///
+/// Existing `SamplingClient` methods and the actor/retry loop are
+/// untouched; this only adds a trait surface so a `dyn SamplingBackend`
+/// can select between xAI and other providers.
+#[async_trait::async_trait]
+impl SamplingBackend for SamplingClient {
+    async fn chat_completion(
+        &self,
+        request: ConversationRequest,
+    ) -> std::result::Result<ConversationResponse, SamplingError> {
+        self.conversation_collect(request).await
+    }
+
+    async fn chat_completion_stream(
+        &self,
+        request: ConversationRequest,
+    ) -> std::result::Result<BoxStream<'static, SamplingEvent>, SamplingError> {
+        let request_id = crate::types::RequestId::random();
+        let idle_timeout = std::time::Duration::from_secs(300);
+        let stream: BoxStream<'static, SamplingEvent> = match self.api_backend() {
+            ApiBackend::ChatCompletions => {
+                let (raw, meta) = self.conversation_stream(request).await?;
+                crate::stream::stream_chat_completions(raw, meta, request_id, idle_timeout).boxed()
+            }
+            ApiBackend::Responses => {
+                let (raw, meta, doom_loop) = self.conversation_stream_responses(request).await?;
+                crate::stream::stream_responses(raw, meta, request_id, idle_timeout, doom_loop)
+                    .boxed()
+            }
+            ApiBackend::Messages => {
+                let (raw, meta) = self.conversation_stream_messages(request).await?;
+                crate::stream::stream_messages(raw, meta, request_id, idle_timeout).boxed()
+            }
+        };
+        Ok(stream)
     }
 }
 

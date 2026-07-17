@@ -13191,6 +13191,7 @@ dependencies = [
 name = "xai-grok-bedrock"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -13678,6 +13679,7 @@ version = "0.1.0"
 dependencies = [
  "async-openai",
  "async-stream",
+ "async-trait",
  "axum",
  "chrono",
  "eventsource-stream",
@@ -13701,12 +13703,15 @@ version = "0.1.0"
 dependencies = [
  "assert_matches",
  "async-openai",
+ "async-trait",
+ "futures-util",
  "indexmap",
  "reqwest 0.12.24",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
  "xai-grok-compaction",
  "xai-grok-tools",
 ]

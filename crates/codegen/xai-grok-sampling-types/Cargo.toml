@@ -7,12 +7,15 @@ description = "Pure data types for the xAI sampling / chat-completion API layer"
 
 [dependencies]
 async-openai = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 xai-grok-compaction = { path = "../../common/xai-grok-compaction" }
 xai-grok-tools = { path = "../xai-grok-tools" }
 

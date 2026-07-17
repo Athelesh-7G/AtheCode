@@ -132,6 +132,22 @@ pub enum SamplingError {
 }
 
 impl SamplingError {
+    /// Build an [`SamplingError::Api`] from a numeric HTTP-ish status and a
+    /// message, without the caller needing to name `reqwest::StatusCode`.
+    ///
+    /// Lets provider backends that don't otherwise depend on `reqwest`
+    /// (e.g. the Bedrock client) still produce a first-class `Api` error.
+    /// An unrecognized status falls back to `500 Internal Server Error`.
+    pub fn api_error(status: u16, message: impl fmt::Display) -> Self {
+        Self::Api {
+            status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            message: message.to_string(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        }
+    }
+
     /// Rebuild a `Serialization` error from a rendered message for non-`Clone`
     /// contexts; it must stay `Serialization` so it remains non-retryable.
     pub fn serialization_message(msg: impl fmt::Display) -> Self {

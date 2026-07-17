@@ -13,6 +13,10 @@
 //! integration, and actor wiring are deliberately out of scope here
 //! and land in a later phase.
 
+pub mod client;
+
+pub use client::BedrockClient;
+
 /// Environment variable that selects the LLM backend (`"xai"` or `"bedrock"`).
 pub const PROVIDER_ENV_VAR: &str = "ATHECODE_PROVIDER";
 

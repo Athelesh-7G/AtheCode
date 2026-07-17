@@ -6,14 +6,22 @@
 //! no file system access) so it can be depended on by downstream crates
 //! (e.g., `xai-chat-state`) without pulling in the full `xai-grok-shell`.
 
+pub mod backend;
 pub mod conversation;
 pub mod doom_loop;
 pub mod error;
+pub mod events;
 pub mod messages;
+pub mod metrics;
+pub mod request_id;
 pub mod serde_helpers;
 pub mod types;
 
+pub use self::backend::SamplingBackend;
 pub use self::conversation::*;
+pub use self::events::{SamplingChannel, SamplingErrorInfo, SamplingErrorKind, SamplingEvent};
+pub use self::metrics::{InferenceLatencyStats, compute_percentiles};
+pub use self::request_id::RequestId;
 pub use self::doom_loop::{
     DOOM_LOOP_CHECK_EVENT_TYPE, DOOM_LOOP_CHECK_HEADER, DoomLoopPeek, DoomLoopRecoveryPolicy,
     DoomLoopSignal, DoomLoopSignalKind, is_check_event, peek_doom_loop,
