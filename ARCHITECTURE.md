@@ -16,31 +16,20 @@ in the codebase at all.
 This fork introduces a `SamplingBackend` trait as the seam between provider
 implementations:
 
-```
-                    ConversationRequest
-                            │
-                            ▼
-              ┌─────────────────────────┐
-              │   SamplingBackend trait │   (xai-grok-sampling-types)
-              └─────────────────────────┘
-                     │              │
-                     ▼              ▼
-          ┌────────────────┐  ┌──────────────────┐
-          │ SamplingClient │  │  BedrockClient    │
-          │ (xai-grok-     │  │  (xai-grok-       │
-          │  sampler)      │  │   bedrock)        │
-          │                │  │                   │
-          │ xAI Chat/      │  │ AWS Converse /    │
-          │ Responses/     │  │ ConverseStream     │
-          │ Messages APIs, │  │ (aws-sdk-          │
-          │ SSE            │  │  bedrockruntime)   │
-          └────────────────┘  └──────────────────┘
-                     │              │
-                     ▼              ▼
-              stream of SamplingEvent
-                            │
-                            ▼
-                  same UI event sink
+```mermaid
+flowchart TD
+    Req["ConversationRequest"]
+    Trait["SamplingBackend trait<br/>(xai-grok-sampling-types)"]
+
+    Req --> Trait
+
+    Trait --> Client1["SamplingClient<br/>(xai-grok-sampler)<br/>xAI Chat / Responses /<br/>Messages APIs, SSE"]
+    Trait --> Client2["BedrockClient<br/>(xai-grok-bedrock)<br/>AWS Converse /<br/>ConverseStream"]
+
+    Client1 --> Events["stream of SamplingEvent"]
+    Client2 --> Events
+
+    Events --> Sink["same UI event sink"]
 ```
 
 Both implementations consume the same `ConversationRequest` and produce the
