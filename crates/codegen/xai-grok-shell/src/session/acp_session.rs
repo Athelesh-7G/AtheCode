@@ -1012,6 +1012,12 @@ pub(crate) struct SessionActor {
     /// tests and other constructor sites use `SamplerHandle::noop()`.
     /// All inference flows through this handle.
     pub(crate) sampler_handle: xai_grok_sampler::SamplerHandle,
+    /// Clone of the sink the sampler actor writes [`SamplingEvent`](xai_grok_sampler::SamplingEvent)s
+    /// to (drained by `handle_sampling_event`). The Bedrock turn path bypasses
+    /// the actor and forwards its own events here so they render identically to
+    /// xAI turns. `SamplerActor::spawn` holds the other clone.
+    pub(crate) sampler_event_tx:
+        tokio::sync::mpsc::UnboundedSender<xai_grok_sampler::SamplingEvent>,
     /// Cached recipe for constructing this session's [`xai_grok_agent::Agent`].
     ///
     /// Populated once at session spawn and then reused by

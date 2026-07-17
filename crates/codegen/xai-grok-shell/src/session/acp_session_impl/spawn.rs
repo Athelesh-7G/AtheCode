@@ -1044,7 +1044,7 @@ pub(crate) async fn spawn_session_actor(
     let sampler_handle = xai_grok_sampler::SamplerActor::spawn(
         sampler_config_initial,
         sampler_retry_policy,
-        sampler_event_tx,
+        sampler_event_tx.clone(),
     );
     let attribution_callback_for_handle = attribution_callback.clone();
     let agent_name_for_handle = initial_agent_type
@@ -1327,6 +1327,7 @@ pub(crate) async fn spawn_session_actor(
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
         sampler_handle,
+        sampler_event_tx,
         rebuild_spec: rebuild_spec.clone(),
         image_description_model,
         image_describe_cache: Arc::new(crate::session::image_describe::ImageDescribeCache::new()),

@@ -534,6 +534,10 @@ pub struct ScreenModeRelaunch {
 pub struct AppView {
     /// Which view is currently active.
     pub active_view: ActiveView,
+    /// Set once the one-time "Bedrock models run without tool execution"
+    /// notice has been shown (on first switch to a Bedrock-provider model),
+    /// so it is not repeated on every subsequent selection.
+    pub bedrock_notice_shown: bool,
     /// View to return to after a mid-session login flow completes or is
     /// cancelled. `Some` only while a `/login` (or 401-triggered re-auth)
     /// initiated from an active session is in progress — it lets the auth
@@ -1171,6 +1175,7 @@ impl AppView {
         welcome_prompt.adopt_slash_mru(slash_mru.clone());
         Self {
             active_view: ActiveView::Welcome,
+            bedrock_notice_shown: false,
             auth_return_view: None,
             agents: IndexMap::new(),
             next_agent_id: 0,
@@ -5059,6 +5064,7 @@ pub(crate) mod tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         AppView {
             active_view: ActiveView::Welcome,
+            bedrock_notice_shown: false,
             auth_return_view: None,
             agents: indexmap::IndexMap::new(),
             next_agent_id: 0,

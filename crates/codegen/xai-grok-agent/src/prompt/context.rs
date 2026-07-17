@@ -149,8 +149,10 @@ pub struct PromptContext {
     #[serde(default = "default_system_prompt_label")]
     pub system_prompt_label: String,
 }
-/// Default identity on trim-tool-descriptions (`You are Grok released by xAI`).
-pub const DEFAULT_SYSTEM_PROMPT_LABEL: &str = "Grok";
+/// Default identity in the system prompt (`You are <label>, an AI coding
+/// assistant`). Overridden per-model via `system_prompt_label` (e.g. a
+/// Bedrock model uses its real display name).
+pub const DEFAULT_SYSTEM_PROMPT_LABEL: &str = "AtheCode";
 fn default_system_prompt_label() -> String {
     DEFAULT_SYSTEM_PROMPT_LABEL.to_string()
 }

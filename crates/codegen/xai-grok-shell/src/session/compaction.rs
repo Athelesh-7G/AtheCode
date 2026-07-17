@@ -2360,6 +2360,7 @@ mod inline_auto_compact_flow_tests {
             ),
             turn_stream_drained: parking_lot::Mutex::new(None),
             sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
+            sampler_event_tx: tokio::sync::mpsc::unbounded_channel().0,
             rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
             image_description_model: crate::test_support::TEST_MODEL.to_owned(),
             image_describe_cache: Arc::new(

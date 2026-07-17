@@ -444,6 +444,22 @@ impl ModelsManager {
         *self.inner.current_reasoning_effort.write() = effort;
     }
 
+    /// The provider serving the given model per the catalog (`"xai"`
+    /// default, or `"bedrock"`). Unknown ids fall back to the xAI default.
+    pub fn model_provider(&self, model_id: &str) -> String {
+        self.inner
+            .models
+            .read()
+            .get(model_id)
+            .map(|e| e.info().provider.clone())
+            .unwrap_or_else(crate::agent::config::default_provider)
+    }
+
+    /// The full [`ModelInfo`] for a catalog id, if present.
+    pub fn model_info(&self, model_id: &str) -> Option<config::ModelInfo> {
+        self.inner.models.read().get(model_id).map(|e| e.info().clone())
+    }
+
     /// Whether the given model supports reasoning effort according to the catalog.
     pub fn model_supports_reasoning_effort(&self, model_id: &str) -> bool {
         self.inner

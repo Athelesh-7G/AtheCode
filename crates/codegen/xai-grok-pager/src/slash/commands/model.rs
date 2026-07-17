@@ -75,23 +75,9 @@ impl SlashCommand for ModelCommand {
         // first, a shorter catalog entry ("Grok") would steal the prefix and
         // treat "4.5" as an effort level.
         if let Some(id) = ctx.models.resolve_by_name_or_id(trimmed) {
-            // Bedrock models: validate AWS env and surface an honest notice.
-            // Interactive Bedrock chat is not yet routed through the turn
-            // engine (Phase 1 Part B checkpoint), so we do not switch to a
-            // model that could not produce responses.
-            if let Some(info) = ctx.models.available.get(&id)
-                && is_bedrock(info)
-            {
-                return match xai_grok_shell::agent::config::validate_bedrock_env() {
-                    Err(msg) => CommandResult::Error(msg),
-                    Ok(()) => CommandResult::Message(format!(
-                        "\"{}\" is a Bedrock model and its AWS credentials are set, but \
-                         interactive Bedrock chat is not yet routed through the turn engine \
-                         (Phase 1 Part B checkpoint), so the model was not switched.",
-                        info.name
-                    )),
-                };
-            }
+            // Bedrock models switch exactly like xAI models. If AWS
+            // credentials are missing, the Bedrock turn path surfaces a clear
+            // terminal error on the first message (via `validate_bedrock_env`).
             return CommandResult::Action(Action::SetDefaultModel(id));
         }
 

@@ -861,6 +861,18 @@ impl SessionActor {
         self: &Arc<Self>,
         request: ConversationRequest,
     ) -> Result<SamplerTurnOutcome, acp::Error> {
+        // Bedrock-provider models take a separate, actor-free path: the xAI
+        // `SamplerActor` (retry loop, doom-loop, proxy auth) is bypassed and the
+        // Bedrock backend is driven directly, forwarding its events into the
+        // same sink the actor writes to. xAI turns below are untouched.
+        let current_model_id = self.models_manager.current_model_id();
+        if self.models_manager.model_provider(current_model_id.0.as_ref())
+            == crate::agent::config::BEDROCK_PROVIDER
+        {
+            return self
+                .run_turn_via_bedrock(current_model_id.0.as_ref(), request)
+                .await;
+        }
         self.prepare_sampler_for_turn().await;
         let stream_drained_rx = {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -912,6 +924,163 @@ impl SessionActor {
             }
         }
     }
+    /// Drive a single turn through the Bedrock backend, bypassing the xAI
+    /// `SamplerActor`.
+    ///
+    /// Resolves a `Box<dyn SamplingBackend>` via
+    /// `resolve_sampling_backend_config`, calls `chat_completion_stream`, and
+    /// forwards each `SamplingEvent` into `self.sampler_event_tx` — the same
+    /// sink the actor writes to — so the response renders in the TUI exactly
+    /// like an xAI turn. The final `ConversationResponse` is captured from the
+    /// terminal `Completed` event and returned for the outer turn loop.
+    ///
+    /// Cancellation: turns are cancelled by aborting the turn task
+    /// (`tasks_cancel`), which drops this future and the stream, tearing down
+    /// the Bedrock connection cleanly — no explicit token needed.
+    ///
+    /// KNOWN LIMITATIONS (intentional for this pass): Bedrock turns do not
+    /// perform auth-refresh (AWS env credentials are static per session) or
+    /// compaction (context trimming). Retryable failures are surfaced as
+    /// terminal errors rather than retried through the xAI recovery machinery.
+    async fn run_turn_via_bedrock(
+        self: &Arc<Self>,
+        model_id: &str,
+        request: ConversationRequest,
+    ) -> Result<SamplerTurnOutcome, acp::Error> {
+        use futures_util::StreamExt;
+
+        let terminal = |info: xai_grok_sampler::SamplingErrorInfo| -> acp::Error {
+            acp::Error::internal_error().data(crate::sampling::error::terminal_error_data(
+                info.message,
+                info.status_code,
+                info.kind,
+            ))
+        };
+
+        // Resolve the model's ModelInfo (for provider + model id) and build the
+        // Bedrock backend. `reconstruct_full_config` only feeds the xAI arm of
+        // the resolver, which is unused here.
+        let Some(model_info) = self.models_manager.model_info(model_id) else {
+            let info = xai_grok_sampler::SamplingErrorInfo::from(&xai_grok_sampling_types::SamplingError::Api {
+                status: reqwest::StatusCode::NOT_FOUND,
+                message: format!("Model '{model_id}' is not in the catalog."),
+                model_metadata: None,
+                retry_after_secs: None,
+                should_retry: None,
+            });
+            return Err(terminal(info));
+        };
+        let xai_config = self.reconstruct_full_config().await;
+        let backend = match crate::agent::config::resolve_sampling_backend_config(
+            &model_info,
+            xai_config,
+        )
+        .await
+        {
+            Ok(crate::agent::config::SamplingBackendConfig::Bedrock(b)) => b,
+            Ok(crate::agent::config::SamplingBackendConfig::Xai(_)) => {
+                // Provider was Bedrock but the resolver returned xAI — treat as
+                // a configuration error rather than silently using the actor.
+                let info = xai_grok_sampler::SamplingErrorInfo::from(
+                    &xai_grok_sampling_types::SamplingError::InvalidConfiguration(
+                        "bedrock provider resolved to a non-bedrock backend",
+                    ),
+                );
+                return Err(terminal(info));
+            }
+            Err(msg) => {
+                let info = xai_grok_sampler::SamplingErrorInfo::from(
+                    &xai_grok_sampling_types::SamplingError::Auth(msg),
+                );
+                self.report_bedrock_failure(&info).await;
+                return Err(terminal(info));
+            }
+        };
+
+        // Arm the same stream-drain barrier the xAI path uses so the outer
+        // turn only proceeds after the drainer has rendered every chunk.
+        let stream_drained_rx = {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            *self.turn_stream_drained.lock() = Some(tx);
+            rx
+        };
+
+        let mut stream = match backend.chat_completion_stream(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                self.turn_stream_drained.lock().take();
+                let info = xai_grok_sampler::SamplingErrorInfo::from(&e);
+                self.report_bedrock_failure(&info).await;
+                return Err(terminal(info));
+            }
+        };
+
+        // Forward every event into the shared sink (drainer renders text and
+        // fires the barrier on `Completed`), capturing the terminal outcome.
+        let event_tx = self.sampler_event_tx.clone();
+        let mut captured: Option<(
+            xai_grok_sampling_types::ConversationResponse,
+            xai_grok_sampler::InferenceLatencyStats,
+        )> = None;
+        let mut failure: Option<xai_grok_sampler::SamplingErrorInfo> = None;
+        while let Some(event) = stream.next().await {
+            match &event {
+                xai_grok_sampler::SamplingEvent::Completed {
+                    response, metrics, ..
+                } => {
+                    captured = Some(((**response).clone(), metrics.clone()));
+                }
+                xai_grok_sampler::SamplingEvent::Failed { error, .. } => {
+                    failure = Some(error.clone());
+                }
+                _ => {}
+            }
+            let _ = event_tx.send(event);
+        }
+
+        match captured {
+            Some((response, metrics)) => {
+                if tokio::time::timeout(std::time::Duration::from_secs(5), stream_drained_rx)
+                    .await
+                    .is_err()
+                {
+                    self.turn_stream_drained.lock().take();
+                    tracing::warn!("bedrock stream-drain barrier timed out");
+                }
+                Ok(SamplerTurnOutcome::Response(
+                    Box::new(response),
+                    Box::new(metrics),
+                ))
+            }
+            None => {
+                self.turn_stream_drained.lock().take();
+                let info = failure.unwrap_or_else(|| {
+                    xai_grok_sampler::SamplingErrorInfo::from(
+                        &xai_grok_sampling_types::SamplingError::StreamError {
+                            error_type: "bedrock".to_string(),
+                            message: "Bedrock stream ended without a completion.".to_string(),
+                        },
+                    )
+                });
+                self.report_bedrock_failure(&info).await;
+                Err(terminal(info))
+            }
+        }
+    }
+
+    /// Surface a Bedrock turn failure to the TUI (mirrors the xAI terminal
+    /// path's `RetryState::Failed` notification) without the xAI recovery flow.
+    async fn report_bedrock_failure(&self, info: &xai_grok_sampler::SamplingErrorInfo) {
+        self.log_terminal_failure(info.kind.as_str(), info.status_code, &info.message);
+        self.send_xai_notification(XaiSessionUpdate::RetryState(
+            crate::extensions::notification::RetryState::Failed {
+                error_type: info.kind.as_str().to_string(),
+                message: info.message.clone(),
+            },
+        ))
+        .await;
+    }
+
     /// Proactively refresh the auth token if near expiry.
     pub(super) async fn refresh_token_if_expired(&self) {
         if let Some(ref am) = self.auth_manager {

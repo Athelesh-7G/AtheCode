@@ -1331,6 +1331,15 @@ impl AgentView {
         ) {
             status.push("badge", Line::from(badge_spans));
         }
+        // Persistent AtheCode brand in the active-chat status bar (welcome
+        // screen has its own badge; this keeps branding visible during use).
+        status.push(
+            "brand",
+            Line::from(Span::styled(
+                "AtheCode",
+                Style::default().fg(theme.accent_user),
+            )),
+        );
         let areas = status.render(buf, layout.status_bar);
         self.hit_bg_status.rect = areas.get("bg_tasks").copied();
         self.hit_goal_status.rect = areas.get("goal").copied();

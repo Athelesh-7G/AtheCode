@@ -3367,6 +3367,10 @@ struct DefaultModelJson {
     #[serde(default = "default_provider")]
     provider: String,
     name: Option<String>,
+    /// Per-model identity used in the system prompt (`You are <label>…`).
+    /// When unset, resolution falls back to the global default.
+    #[serde(default)]
+    system_prompt_label: Option<String>,
     description: Option<String>,
     context_window: Option<NonZeroU64>,
     temperature: Option<f32>,
@@ -3429,7 +3433,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 description: m.description,
                 context_window,
                 auto_compact_threshold_percent: None,
-                system_prompt_label: None,
+                system_prompt_label: m.system_prompt_label,
                 temperature: m.temperature,
                 top_p: m.top_p,
                 max_completion_tokens: m.max_completion_tokens,

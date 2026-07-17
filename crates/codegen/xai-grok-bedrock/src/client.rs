@@ -140,9 +140,15 @@ fn build_converse_input(request: &ConversationRequest) -> Result<ConverseInput, 
                     );
                 }
             }
-            // Tool calls/results, backend tool calls, and reasoning are
-            // not yet mapped through the Bedrock wire format (Part A is
-            // text-only). Skip them.
+            // KNOWN LIMITATION: Bedrock tool calling (toolConfig) is not yet
+            // implemented. This means Bedrock models cannot execute bash, read
+            // files, or verify generated code — they only produce single-shot
+            // text responses. Generated code is NOT executed or tested before
+            // being shown to the user. This is a real correctness gap: models
+            // may produce code with bugs that would be caught by execution.
+            // TODO: Wire ConversationItem::ToolCall/ToolResult through
+            // ToolConfiguration and parse ContentBlock::ToolUse from streaming
+            // responses to close this gap.
             _ => {}
         }
     }

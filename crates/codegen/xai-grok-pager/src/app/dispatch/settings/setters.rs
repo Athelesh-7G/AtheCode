@@ -1558,7 +1558,7 @@ pub(in crate::app::dispatch) fn set_default_model(
     // Snapshot previous id + display name from the active agent's
     // session (the same source `set_default_model_inner` mutates
     // and the modal reads).
-    let (prev_id, session_id, available_has_new, new_display) = {
+    let (prev_id, session_id, available_has_new, new_display, new_is_bedrock) = {
         let Some(agent) = app.agents.get(&aid) else {
             tracing::error!(
                 target: "settings",
@@ -1571,7 +1571,22 @@ pub(in crate::app::dispatch) fn set_default_model(
         let session_id = agent.session.session_id.clone();
         let available_has_new = agent.session.models.available.contains_key(&new_id);
         let new_display = agent.session.models.display_name_for(&new_id);
-        (prev_id, session_id, available_has_new, new_display)
+        let new_is_bedrock = agent
+            .session
+            .models
+            .available
+            .get(&new_id)
+            .and_then(|info| info.meta.as_ref())
+            .and_then(|m| m.get("provider"))
+            .and_then(|v| v.as_str())
+            == Some("bedrock");
+        (
+            prev_id,
+            session_id,
+            available_has_new,
+            new_display,
+            new_is_bedrock,
+        )
     };
 
     if !available_has_new {
@@ -1602,6 +1617,17 @@ pub(in crate::app::dispatch) fn set_default_model(
         "setting changed",
     );
     app.show_toast(&save_default_model_toast(&new_display));
+
+    // One-time notice on first switch to a Bedrock model: they currently run
+    // without tool execution (see BedrockClient::build_converse_input), so
+    // generated code is not automatically tested. Non-blocking toast.
+    if new_is_bedrock && !app.bedrock_notice_shown {
+        app.bedrock_notice_shown = true;
+        app.show_toast(
+            "Note: Bedrock models currently run without tool execution — generated code \
+             is not automatically tested. Verify important code before running it.",
+        );
+    }
 
     // Persist the **model ID** (catalog key), not the display name.
     // The shell's `resolve_default_model` matches by slug / map key,
