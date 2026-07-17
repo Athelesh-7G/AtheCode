@@ -42,6 +42,15 @@ pub const DEFAULT_AGENT_TYPE: &str = "grok-build-plan";
 pub fn default_agent_type() -> String {
     DEFAULT_AGENT_TYPE.to_owned()
 }
+/// Default LLM provider for a model entry when none is specified. Keeps
+/// catalogs/configs written before the `provider` field existed on the
+/// xAI path.
+pub const DEFAULT_PROVIDER: &str = "xai";
+/// Provider value that selects the Amazon Bedrock backend.
+pub const BEDROCK_PROVIDER: &str = "bedrock";
+pub fn default_provider() -> String {
+    DEFAULT_PROVIDER.to_owned()
+}
 /// Default base URL for the cli chat proxy.
 pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Default base URL for the public xAI API.
@@ -3174,6 +3183,11 @@ pub fn resolve_model_list(
         }
         resolved = prefetched;
     }
+    // Bedrock models are provider-additive: a fetched/prefetched xAI catalog
+    // replaces the built-in defaults above, so re-merge the bundled
+    // `provider == "bedrock"` entries here to keep them selectable regardless
+    // of the xAI catalog source. Existing keys are never overwritten.
+    merge_bedrock_defaults(&mut resolved, &cfg.endpoints);
     for (key, model_override) in &cfg.config_models {
         let had_base = resolved.contains_key(key);
         let base = resolved.shift_remove(key);
@@ -3310,6 +3324,16 @@ pub fn default_model_entries(endpoints: &EndpointsConfig) -> IndexMap<String, Mo
         .map(|(key, entry)| (key, ModelEntry::from_config_entry(&entry)))
         .collect()
 }
+/// Merge the bundled `provider == "bedrock"` default models into `resolved`,
+/// skipping any key already present. Ensures Bedrock models stay selectable
+/// even when a fetched/prefetched xAI catalog replaced the built-in defaults.
+fn merge_bedrock_defaults(resolved: &mut IndexMap<String, ModelEntry>, endpoints: &EndpointsConfig) {
+    for (key, entry) in default_model_entries(endpoints) {
+        if entry.info.provider == BEDROCK_PROVIDER && !resolved.contains_key(&key) {
+            resolved.insert(key, entry);
+        }
+    }
+}
 /// Resolve a model against the available model map.
 /// Checks the map key (id) first, then falls back to a slug scan.
 pub fn find_model_by_id<'a>(
@@ -3340,6 +3364,8 @@ pub fn effective_classifier_supports_re(
 struct DefaultModelJson {
     id: Option<String>,
     model: String,
+    #[serde(default = "default_provider")]
+    provider: String,
     name: Option<String>,
     description: Option<String>,
     context_window: Option<NonZeroU64>,
@@ -3396,6 +3422,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
             let config = ModelEntryConfig {
                 id: m.id,
                 model: m.model,
+                provider: m.provider,
                 base_url: endpoints.resolve_inference_base_url(),
                 api_base_url: Some(endpoints.xai_api_base_url.clone()),
                 name: m.name,
@@ -3439,6 +3466,10 @@ pub struct ModelEntryConfig {
     pub id: Option<String>,
     /// The routing slug sent in API requests.
     pub model: String,
+    /// Which LLM provider serves this model (`"xai"` default, or
+    /// `"bedrock"`). Defaulted for configs written before it existed.
+    #[serde(default = "default_provider")]
+    pub provider: String,
     /// The base URL of the model. e.g. "https://api.x.ai/v1"
     pub base_url: String,
     /// Human-readable display name of the model.
@@ -3719,6 +3750,12 @@ pub struct ModelInfo {
     pub id: Option<String>,
     /// The routing slug sent in API requests.
     pub model: String,
+    /// Which LLM provider serves this model. `"xai"` (default) routes
+    /// through the existing xAI sampler; `"bedrock"` routes through the
+    /// Amazon Bedrock backend. Defaulted for backward compatibility with
+    /// catalogs/configs written before this field existed.
+    #[serde(default = "default_provider")]
+    pub provider: String,
     /// The base URL of the model (session endpoint). e.g. "https://cli-chat-proxy.grok.com/v1"
     pub base_url: String,
     /// Human-readable name of the model. Honored by both the picker
@@ -3788,6 +3825,7 @@ impl ModelInfo {
             user_selectable: true,
             id: None,
             model: slug.to_owned(),
+            provider: default_provider(),
             base_url: String::new(),
             name: None,
             description: None,
@@ -3823,6 +3861,7 @@ impl ModelInfo {
             user_selectable: true,
             id: entry.id.clone(),
             model: entry.model.clone(),
+            provider: entry.provider.clone(),
             base_url: entry.base_url.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
@@ -4507,6 +4546,7 @@ pub fn resolve_aux_model_sampling_config(
                 model: catalog_entry
                     .map(|e| e.info.model)
                     .unwrap_or_else(|| model_id.to_owned()),
+                provider: default_provider(),
                 base_url: endpoints.resolve_inference_base_url(),
                 name: None,
                 description: None,
@@ -4696,6 +4736,77 @@ pub fn inject_url_derived_headers(
     }
     let _ = (alpha_test_key, base_url);
 }
+/// A resolved inference backend for a selected model.
+///
+/// The xAI path yields a [`SamplerConfig`] consumed by the existing
+/// sampler actor / retry machinery, exactly as before. The Bedrock path
+/// yields a ready [`SamplingBackend`](xai_grok_sampling_types::SamplingBackend)
+/// trait object that a caller drives directly via
+/// `chat_completion` / `chat_completion_stream` — Bedrock has none of
+/// xAI's doom-loop / proxy-auth behavior, so bypassing the xAI actor is
+/// correct rather than a shortcut.
+///
+/// NOTE (Phase 1 Part B checkpoint): this enum and
+/// [`resolve_sampling_backend_config`] are the integration seam for
+/// routing an interactive turn through a provider. The session turn
+/// engine does not consume them yet — wiring the `SamplerActor` / turn
+/// state machine to drive `SamplingBackendConfig::Bedrock` is the
+/// remaining deep-integration step.
+pub enum SamplingBackendConfig {
+    Xai(SamplerConfig),
+    Bedrock(Box<dyn xai_grok_sampling_types::SamplingBackend>),
+}
+
+/// Environment variables Amazon Bedrock authentication requires.
+pub const BEDROCK_REQUIRED_ENV_VARS: [&str; 3] =
+    ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"];
+
+/// Validate that the AWS environment needed for Bedrock is present.
+///
+/// Returns a human-readable error naming exactly which variables are
+/// missing/empty, suitable for surfacing in the TUI instead of panicking
+/// when a Bedrock model is selected without credentials.
+pub fn validate_bedrock_env() -> Result<(), String> {
+    let missing: Vec<&str> = BEDROCK_REQUIRED_ENV_VARS
+        .iter()
+        .copied()
+        .filter(|k| {
+            std::env::var(k)
+                .map(|v| v.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "This is a Bedrock model. Set {} in your environment, then reselect the model.",
+            missing.join(", ")
+        ))
+    }
+}
+
+/// Resolve a selected model to its inference backend.
+///
+/// For xAI-provider models, wraps the already-built `xai_config`
+/// unchanged. For Bedrock-provider models, validates the AWS environment
+/// and builds a `BedrockClient` (async, since AWS credential/region
+/// resolution is async).
+pub async fn resolve_sampling_backend_config(
+    model: &ModelInfo,
+    xai_config: SamplerConfig,
+) -> Result<SamplingBackendConfig, String> {
+    if model.provider == BEDROCK_PROVIDER {
+        validate_bedrock_env()?;
+        let client = xai_grok_bedrock::BedrockClient::new(&model.model)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(SamplingBackendConfig::Bedrock(Box::new(client)))
+    } else {
+        Ok(SamplingBackendConfig::Xai(xai_config))
+    }
+}
+
 pub fn resolve_model_to_sampling_config(
     model_id: &str,
     models: &IndexMap<String, ModelEntry>,
@@ -4729,6 +4840,7 @@ fn resolve_hidden_default_web_search_sampling_config(
         info: ModelInfo {
             id: None,
             model: model_id.to_owned(),
+            provider: default_provider(),
             base_url: endpoints.resolve_inference_base_url(),
             name: None,
             description: None,
@@ -4822,6 +4934,10 @@ pub fn to_acp_model_info(
             let total_context_tokens = info.context_window.get();
             let meta = {
                 let mut map = serde_json::Map::new();
+                map.insert(
+                    "provider".to_string(),
+                    serde_json::Value::String(info.provider.clone()),
+                );
                 map.insert(
                     "totalContextTokens".to_string(),
                     serde_json::Value::Number(total_context_tokens.into()),
@@ -5385,6 +5501,7 @@ reasoning_effort = "low"
                 user_selectable: true,
                 id: None,
                 model: model.to_string(),
+                provider: default_provider(),
                 base_url: base_url.to_string(),
                 name: None,
                 description: None,
@@ -10580,6 +10697,7 @@ default = "grok-4.5"
                 user_selectable: true,
                 id: None,
                 model: slug.to_owned(),
+                provider: default_provider(),
                 base_url: "https://test.example.com/v1".to_owned(),
                 name: Some(slug.to_owned()),
                 description: None,

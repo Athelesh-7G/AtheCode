@@ -829,6 +829,7 @@ pub fn parse_remote_model_value(
     Some(crate::agent::config::ModelEntryConfig {
         id,
         model,
+        provider: crate::agent::config::default_provider(),
         base_url,
         name,
         description: get_string(obj, "description"),

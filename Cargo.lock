@@ -13879,6 +13879,7 @@ dependencies = [
  "xai-grok-agent",
  "xai-grok-announcements",
  "xai-grok-auth",
+ "xai-grok-bedrock",
  "xai-grok-compaction",
  "xai-grok-config",
  "xai-grok-config-types",

@@ -75,6 +75,23 @@ impl SlashCommand for ModelCommand {
         // first, a shorter catalog entry ("Grok") would steal the prefix and
         // treat "4.5" as an effort level.
         if let Some(id) = ctx.models.resolve_by_name_or_id(trimmed) {
+            // Bedrock models: validate AWS env and surface an honest notice.
+            // Interactive Bedrock chat is not yet routed through the turn
+            // engine (Phase 1 Part B checkpoint), so we do not switch to a
+            // model that could not produce responses.
+            if let Some(info) = ctx.models.available.get(&id)
+                && is_bedrock(info)
+            {
+                return match xai_grok_shell::agent::config::validate_bedrock_env() {
+                    Err(msg) => CommandResult::Error(msg),
+                    Ok(()) => CommandResult::Message(format!(
+                        "\"{}\" is a Bedrock model and its AWS credentials are set, but \
+                         interactive Bedrock chat is not yet routed through the turn engine \
+                         (Phase 1 Part B checkpoint), so the model was not switched.",
+                        info.name
+                    )),
+                };
+            }
             return CommandResult::Action(Action::SetDefaultModel(id));
         }
 
@@ -148,19 +165,57 @@ fn detect_effort_phase(models: &ModelState, args_query: &str) -> Option<acp::Mod
     None
 }
 
+/// The `provider` this model routes through, read from ACP meta. Defaults
+/// to `"xai"` for entries written before the provider field existed.
+fn provider_of(info: &acp::ModelInfo) -> &str {
+    info.meta
+        .as_ref()
+        .and_then(|m| m.get("provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("xai")
+}
+
+/// Whether this model is served by Amazon Bedrock.
+fn is_bedrock(info: &acp::ModelInfo) -> bool {
+    provider_of(info) == "bedrock"
+}
+
+/// Human-readable upstream vendor for a Bedrock model, parsed from the
+/// leading segment of its description (e.g. `"Qwen · via Amazon Bedrock"`
+/// → `"Qwen"`). Falls back to `"Bedrock"`.
+fn bedrock_vendor(info: &acp::ModelInfo) -> String {
+    info.description
+        .as_deref()
+        .and_then(|d| d.split(" · ").next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Bedrock")
+        .to_string()
+}
+
 /// One row per logical model. Reasoning models get a trailing space in
 /// `insert_text` so the prompt widget chains into the effort sub-menu.
+///
+/// Rows are grouped by provider: xAI ("AtheCode") models first, then
+/// Bedrock models. Each Bedrock row is labeled with its upstream vendor
+/// (e.g. `"Qwen3 Coder Next — Qwen"`). `insert_text` stays the bare model
+/// name so acceptance still resolves through the normal path.
 fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
     let current_id = models.current.as_ref();
-    let mut items: Vec<ArgItem> = Vec::with_capacity(models.available.len());
-    for (id, info) in &models.available {
+
+    let make_item = |id: &acp::ModelId, info: &acp::ModelInfo| -> ArgItem {
         let is_current = current_id == Some(id);
         let supports = supports_reasoning_effort(info);
 
-        let display = if is_current {
-            format!("{} (current)", info.name)
+        let base_label = if is_bedrock(info) {
+            format!("{} — {}", info.name, bedrock_vendor(info))
         } else {
             info.name.clone()
+        };
+        let display = if is_current {
+            format!("{base_label} (current)")
+        } else {
+            base_label
         };
 
         // Trailing space on reasoning models: signals "more input
@@ -172,13 +227,31 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
             info.name.clone()
         };
 
-        items.push(ArgItem {
+        ArgItem {
             display,
             match_text: info.name.clone(),
             insert_text,
             description: info.description.clone().unwrap_or_default(),
-        });
-    }
+        }
+    };
+
+    // xAI ("AtheCode") models first, Bedrock models second — each group
+    // keeps its catalog order.
+    let mut items: Vec<ArgItem> = Vec::with_capacity(models.available.len());
+    items.extend(
+        models
+            .available
+            .iter()
+            .filter(|(_, info)| !is_bedrock(info))
+            .map(|(id, info)| make_item(id, info)),
+    );
+    items.extend(
+        models
+            .available
+            .iter()
+            .filter(|(_, info)| is_bedrock(info))
+            .map(|(id, info)| make_item(id, info)),
+    );
     items
 }
 

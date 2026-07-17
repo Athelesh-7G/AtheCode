@@ -26,6 +26,16 @@ struct DefaultModels {
 #[derive(serde::Deserialize)]
 struct DefaultModelEntry {
     model: String,
+    /// LLM provider serving this model (`"xai"` default, or `"bedrock"`).
+    /// Parsed for forward-compatibility with the multi-provider catalog;
+    /// the default-id helpers in this crate don't branch on it yet.
+    #[serde(default = "default_xai_provider")]
+    #[allow(dead_code)]
+    provider: String,
+}
+
+fn default_xai_provider() -> String {
+    "xai".to_string()
 }
 
 static DEFAULTS: LazyLock<DefaultModels> = LazyLock::new(|| {
