@@ -1,4 +1,4 @@
-//! xai-grok-pager — Grok Build TUI.
+//! AtheCode — AI coding assistant TUI.
 //!
 //! A clean-room implementation built on the v3 pager rendering engine.
 
