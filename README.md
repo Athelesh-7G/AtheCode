@@ -24,31 +24,16 @@ Where upstream Grok Build talks to exactly one provider, AtheCode introduces a p
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          ATHECODE TERMINAL UI                            │
-│                    (xai-grok-pager — Rust TUI, 62+ crates)               │
-└────────────────────────────────┬───────────────────────────────────────┘
-                                  │
-                                  ▼
-                    ┌─────────────────────────────┐
-                    │     SamplingBackend trait     │
-                    │  (provider-agnostic interface) │
-                    └──────────────┬──────────────┘
-                                  │
-                 ┌────────────────┴────────────────┐
-                 ▼                                  ▼
-      ┌─────────────────────┐          ┌─────────────────────────┐
-      │   xAI SamplingClient  │          │      BedrockClient        │
-      │   (upstream, xAI API) │          │   (new — this fork)       │
-      └─────────────────────┘          └────────────┬────────────┘
-                                                       │
-                                                       ▼
-                                        ┌───────────────────────────┐
-                                        │  Amazon Bedrock Runtime    │
-                                        │  Converse + ConverseStream │
-                                        │  SigV4 · 11 models         │
-                                        └───────────────────────────┘
+```mermaid
+flowchart TD
+    UI["AtheCode Terminal UI<br/>xai-grok-pager — Rust TUI, 62+ crates"]
+
+    UI --> Trait["SamplingBackend trait<br/>provider-agnostic interface"]
+
+    Trait --> XAI["xAI SamplingClient<br/>upstream, xAI API"]
+    Trait --> Bedrock["BedrockClient<br/>new — this fork"]
+
+    Bedrock --> Runtime["Amazon Bedrock Runtime<br/>Converse + ConverseStream<br/>SigV4 · 11 models"]
 ```
 
 ---
