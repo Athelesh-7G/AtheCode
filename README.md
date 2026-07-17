@@ -1,14 +1,5 @@
 <div align="center">
 
-```
-   █████╗ ████████╗██╗  ██╗███████╗ ██████╗ ██████╗ ██████╗ ███████╗
-  ██╔══██╗╚══██╔══╝██║  ██║██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
-  ███████║   ██║   ███████║█████╗  ██║     ██║   ██║██║  ██║█████╗
-  ██╔══██║   ██║   ██╔══██║██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝
-  ██║  ██║   ██║   ██║  ██║███████╗╚██████╗╚██████╔╝██████╔╝███████╗
-  ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
-```
-
 # AtheCode
 
 **A terminal coding agent powered by 11 open and closed-source models on Amazon Bedrock.**
@@ -123,6 +114,8 @@ Grok Build ships with a single hard-wired xAI client. Everything below is new en
 - **Provider-aware model catalog** — 11 Bedrock models merged into the existing catalog system with correct per-model token limits and system-prompt identity, selectable through the same `/model` picker as the original xAI model.
 - **Parallel turn routing** — Bedrock turns run through a dedicated execution path that writes into the same event sink as the xAI actor, so both providers stream identically in the chat UI with zero changes to existing xAI turn logic.
 
+Full technical breakdown in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
 ---
 
 ## Tech Stack
@@ -144,6 +137,14 @@ Grok Build ships with a single hard-wired xAI client. Everything below is new en
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the `SamplingBackend` trait, Bedrock client design, streaming architecture, turn routing
 - [`EVALUATION.md`](./EVALUATION.md) — testing methodology and results
 - [`CONTRIBUTIONS.md`](./CONTRIBUTIONS.md) — full diff against upstream Grok Build
+
+---
+
+## Contributing
+
+This fork is maintained independently and does not accept external pull requests. It's published for source transparency under the Apache License 2.0 — fork it, run it, adapt it for your own use.
+
+The upstream project ([xai-org/grok-build](https://github.com/xai-org/grok-build)) has its own separate contribution policy; see that repository directly.
 
 ---
 
