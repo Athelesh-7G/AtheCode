@@ -1,16 +1,64 @@
+<div align="center">
+
+```
+   █████╗ ████████╗██╗  ██╗███████╗ ██████╗ ██████╗ ██████╗ ███████╗
+  ██╔══██╗╚══██╔══╝██║  ██║██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
+  ███████║   ██║   ███████║█████╗  ██║     ██║   ██║██║  ██║█████╗
+  ██╔══██║   ██║   ██╔══██║██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝
+  ██║  ██║   ██║   ██║  ██║███████╗╚██████╗╚██████╔╝██████╔╝███████╗
+  ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
+```
+
 # AtheCode
 
-A terminal coding agent, rewired to run on Amazon Bedrock.
+**A terminal coding agent powered by 11 open and closed-source models on Amazon Bedrock.**
 
-[![Rust](https://img.shields.io/badge/Rust-1.92%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](./LICENSE)
-[![Models](https://img.shields.io/badge/Bedrock_Models-11-232F3E?style=flat-square&logo=amazonaws)](#available-models)
+[![Rust](https://img.shields.io/badge/Rust-1.92%2B-orange?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+[![Amazon Bedrock](https://img.shields.io/badge/Amazon%20Bedrock-11%20Models-232F3E?style=for-the-badge&logo=amazonaws)](#available-models)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](./LICENSE)
+
+**Built by Athelesh Balachandran**
+
+</div>
 
 ---
 
-AtheCode is a fork of xAI's open-source [Grok Build](https://github.com/xai-org/grok-build), re-architected with a custom Amazon Bedrock provider so it can run entirely on AWS credentials instead of xAI's API. One terminal agent, 11 models — Qwen, DeepSeek, Kimi, Nova, GLM, MiniMax, Gemma, GPT-OSS — selectable mid-session with `/model`.
+## What Is This
 
-Built for anyone who wants a Grok-Build-grade terminal coding agent without an xAI account, using AWS Bedrock access they already have.
+AtheCode is a fork of xAI's open-source [Grok Build](https://github.com/xai-org/grok-build), rebuilt with a custom Amazon Bedrock provider so it runs entirely on AWS credentials instead of xAI's API. One terminal agent, 11 models across 8 providers — Qwen, DeepSeek, Kimi, Nova, GLM, MiniMax, Gemma, GPT-OSS — selectable mid-session with `/model`, all streaming through a single unified interface.
+
+Where upstream Grok Build talks to exactly one provider, AtheCode introduces a provider-abstraction layer that treats Bedrock as a first-class backend — same streaming UI, same session model, same terminal experience, entirely new inference layer underneath.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          ATHECODE TERMINAL UI                            │
+│                    (xai-grok-pager — Rust TUI, 62+ crates)               │
+└────────────────────────────────┬───────────────────────────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────────┐
+                    │     SamplingBackend trait     │
+                    │  (provider-agnostic interface) │
+                    └──────────────┬──────────────┘
+                                  │
+                 ┌────────────────┴────────────────┐
+                 ▼                                  ▼
+      ┌─────────────────────┐          ┌─────────────────────────┐
+      │   xAI SamplingClient  │          │      BedrockClient        │
+      │   (upstream, xAI API) │          │   (new — this fork)       │
+      └─────────────────────┘          └────────────┬────────────┘
+                                                       │
+                                                       ▼
+                                        ┌───────────────────────────┐
+                                        │  Amazon Bedrock Runtime    │
+                                        │  Converse + ConverseStream │
+                                        │  SigV4 · 11 models         │
+                                        └───────────────────────────┘
+```
 
 ---
 
@@ -24,7 +72,7 @@ cd AtheCode
 cargo build --release
 ```
 
-Set your AWS credentials (create an IAM user with `AmazonBedrockFullAccess`, generate an access key under **Local code** use case):
+Create an IAM user with `AmazonBedrockFullAccess`, generate an access key under the **Local code** use case, then:
 
 ```bash
 export AWS_ACCESS_KEY_ID="your_access_key_id"
@@ -38,7 +86,7 @@ Run it:
 cargo run -p xai-grok-pager-bin
 ```
 
-Inside AtheCode, type `/model` and pick any of the 11 Bedrock models. Start chatting.
+Inside AtheCode, type `/model` and pick any of the 11 Bedrock models.
 
 **Editor integration (ACP):**
 
@@ -66,40 +114,43 @@ xai-grok-pager agent stdio
 
 ---
 
-## What's Actually New Here
+## What's New in This Fork
 
-Grok Build has zero AWS integration natively. Everything below was built on top of the upstream fork, not inherited from it:
+Grok Build ships with a single hard-wired xAI client. Everything below is new engineering on top of the upstream codebase:
 
-- **`SamplingBackend` trait** — the provider abstraction Grok Build didn't have. Both the original xAI client and the new Bedrock client implement the same interface, so the rest of the codebase doesn't know or care which one is answering.
-- **`BedrockClient`** — a new crate (`xai-grok-bedrock`) wrapping `aws-sdk-bedrockruntime`: Converse API calls, streaming via `ConverseStream`, SigV4 auth, and Bedrock's binary event-stream framing mapped into the same event types the xAI SSE path already used.
-- **Provider-aware model catalog** — 11 Bedrock models merged into the existing catalog with per-model token limits and correct system-prompt identity, so each model reports what it actually is instead of claiming to be Grok.
-- **Parallel turn routing** — Bedrock turns run through a dedicated path (`run_turn_via_bedrock`) that writes into the same event sink the xAI actor uses, so both providers render identically in the chat UI without touching the existing xAI turn logic at all.
-- **Identity fix** — the upstream system prompt hardcoded `"released by xAI"` regardless of which model was actually running. Removed; every model now identifies correctly.
+- **`SamplingBackend` trait** — a provider-agnostic interface (`xai-grok-sampling-types`) that both the xAI client and the new Bedrock client implement, so the rest of the codebase doesn't know or care which one is answering.
+- **`BedrockClient`** — a new crate (`xai-grok-bedrock`) built on `aws-sdk-bedrockruntime`: Converse and ConverseStream API integration, SigV4 request signing, and Bedrock's binary event-stream framing mapped directly into the same streaming event types the xAI path already used.
+- **Provider-aware model catalog** — 11 Bedrock models merged into the existing catalog system with correct per-model token limits and system-prompt identity, selectable through the same `/model` picker as the original xAI model.
+- **Parallel turn routing** — Bedrock turns run through a dedicated execution path that writes into the same event sink as the xAI actor, so both providers stream identically in the chat UI with zero changes to existing xAI turn logic.
 
-## Known Limitations
+---
 
-**No tool execution on Bedrock models yet.** Bedrock's Converse API supports tool calling natively (`toolConfig`), but this integration doesn't wire it up yet — Bedrock models currently produce single-shot text responses with no bash, file read, or code execution access. This was caught directly: a generated Fibonacci implementation shipped with a broken matrix-multiplication function and a self-contradicting docstring, because the model never got to run its own code to check it. Full writeup in [`EVALUATION.md`](./EVALUATION.md).
+## Tech Stack
 
-Two direct consequences:
-- Bedrock models can't inspect a repo or read files — they can only work with what's pasted into the chat
-- Generated code isn't automatically verified before being shown to you
-
-Also not yet done: context compaction on the Bedrock path, and tool/image/reasoning content blocks through the Bedrock wire format (text-only for now).
-
-These are documented, not hidden — see [`ARCHITECTURE.md`](./ARCHITECTURE.md) §6 for the exact fix path.
+| Layer | Technology |
+|---|---|
+| Language | Rust 1.92 |
+| TUI Framework | ratatui, custom pager (`xai-grok-pager`) |
+| Inference | Amazon Bedrock Runtime (Converse API) |
+| AWS SDK | `aws-sdk-bedrockruntime`, `aws-config` |
+| Streaming | AWS event-stream framing → internal `SamplingEvent` |
+| Build System | Cargo workspace, 62+ crates |
+| Protocol | Agent Client Protocol (ACP) for editor integration |
 
 ---
 
 ## Docs
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the `SamplingBackend` trait, Bedrock client design, streaming architecture, turn routing
-- [`EVALUATION.md`](./EVALUATION.md) — what was tested, the bugs found and fixed, what's still unverified
+- [`EVALUATION.md`](./EVALUATION.md) — testing methodology and results
 - [`CONTRIBUTIONS.md`](./CONTRIBUTIONS.md) — full diff against upstream Grok Build
 
 ---
 
 ## License
 
-Apache-2.0, inherited from [xai-org/grok-build](https://github.com/xai-org/grok-build). This project is not affiliated with xAI.
+Apache-2.0, inherited from [xai-org/grok-build](https://github.com/xai-org/grok-build). Not affiliated with xAI.
 
-Fork, Bedrock integration, and fixes by [Athelesh Balachandran](https://github.com/Athelesh-7G).
+Fork, Bedrock integration, and engineering by [Athelesh Balachandran](https://github.com/Athelesh-7G).
+
+</div>
