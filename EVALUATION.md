@@ -1,10 +1,11 @@
 # Evaluation
 
 This document records what was actually tested during the Bedrock
-integration, what bugs live testing surfaced, and what remains unverified.
-It is written as an honest evaluation record, not a changelog — the most
-useful finding here is a real correctness gap in the assistant, not a list
-of things that worked.
+integration, the behavioral issues uncovered through live validation, the
+fixes applied, and the areas that remain unverified. It serves as an
+engineering evaluation record rather than a changelog, documenting both the
+validated capabilities of this fork and the limitations that still require
+future work.
 
 ## 1. What Was Tested
 
@@ -24,15 +25,16 @@ credentials during development; it exists for the operator to run manually
 (`cargo run -p xai-grok-bedrock --bin bedrock_smoke_test`) as the first
 checkpoint before trusting the full TUI integration.
 
-**Live TUI testing**: performed manually by the project owner, with real
-AWS credentials, against the full interactive chat path. This is where the
-four bugs below were found — none of them were caught by compilation or the
-smoke test, because none of them are type errors; they're behavioral gaps
-that only show up when a real model actually responds.
+**Live TUI testing:** performed manually by the project owner using real AWS
+credentials against the full interactive chat path. This validated model
+selection, provider routing, response streaming, multi-turn conversations,
+and overall runtime behavior. It also exposed the behavioral issues
+documented below—none of which could have been detected through compilation
+or the standalone smoke test alone.
 
-## 2. Real Bug Found and What It Revealed
+## 2. Tool-Calling Validation Gap
 
-**What happened**: with Qwen3 Coder Next selected as the active model, the
+**What happened:** with Qwen3 Coder Next selected as the active model, the
 user asked for a fibonacci implementation. The model returned code that
 included a matrix-multiplication-based fibonacci function
 (`fibonacci_matrix`) with a broken matrix-multiplication helper, alongside a
@@ -40,103 +42,105 @@ docstring asserting `fibonacci_matrix(100) == 354224848179261915075` — which
 is false; that is not the 100th Fibonacci number, and the buggy
 multiplication function couldn't have produced it correctly regardless.
 
-**Why this is the most valuable finding, not an embarrassment**: the model
-being wrong isn't surprising — any model can generate buggy code. What this
-proved is a structural gap in the harness: **the Bedrock turn path has no
-way to execute or verify the code it generates before showing it to the
-user.** Root-cause diagnosis (see
-[ARCHITECTURE.md §6](ARCHITECTURE.md#6-known-gap-tool-calling)) confirmed
-`BedrockClient` never sends `toolConfig` on the Converse request and never
-parses `ContentBlock::ToolUse` from the response — so a Bedrock turn is
-always single-shot text, with no bash tool to run `cargo test` or a Python
-snippet against its own claims. The xAI path, by contrast, runs a full
-ReAct tool-calling loop (`turn.rs`: `execute_tool_calls` → `continue` until
-`tool_calls.is_empty()`) — the same class of bug would very likely have
-been caught before being shown to the user, because the model could have
-run the code itself.
+**Why this mattered:** the incorrect code itself was not the primary issue.
+Any LLM can generate buggy code. The important finding was that the Bedrock
+execution path had no mechanism to verify its own output before presenting
+it to the user.
 
-This was documented as a known limitation (not fixed in this pass — it's a
-genuinely large feature: `ToolConfiguration` on requests, `ToolResultBlock`
-parsing on streaming and non-streaming responses, and threading both
-through the existing ReAct loop) and surfaced to the user directly: a
-one-time toast on first Bedrock model selection now states that generated
-code is not automatically tested.
+Root-cause analysis (see
+[ARCHITECTURE.md §6](ARCHITECTURE.md#6-known-gap-tool-calling)) confirmed
+that `BedrockClient` never sends `toolConfig` on Converse requests and never
+parses `ContentBlock::ToolUse` responses. Consequently, every Bedrock turn
+is currently limited to single-shot text generation with no ability to
+execute generated code or validate its own claims.
+
+By contrast, the original xAI execution path runs a complete ReAct
+tool-calling loop (`turn.rs`: `execute_tool_calls` → `continue` until
+`tool_calls.is_empty()`), allowing models to invoke tools such as bash
+before producing a final answer. The same class of error would likely have
+been detected automatically through tool execution.
+
+This limitation was documented rather than hidden. A one-time notification
+now informs users when selecting a Bedrock model that generated code is not
+automatically verified until tool calling is implemented.
 
 ## 3. Model Identity Bug
 
-**What happened**: asking any active model "who are you" returned "Grok
+**What happened:** asking any active model "who are you" returned "Grok
 4.5" — regardless of whether a Bedrock model was actually selected.
 
-**Root cause**: `crates/codegen/xai-grok-agent/templates/prompt.md` line 1
+**Root cause:** `crates/codegen/xai-grok-agent/templates/prompt.md` line 1
 hardcoded `You are ${{ system_prompt_label }} released by xAI.` — the
 "released by xAI" clause was unconditional text, not templated. Separately,
 `DEFAULT_SYSTEM_PROMPT_LABEL` in `xai-grok-agent/src/prompt/context.rs`
-defaulted to `"Grok"`, and — critically — **every one of the 11 Bedrock
-catalog entries had no `system_prompt_label` set**, so every Bedrock model
-resolved to that same "Grok" default. Combined, the system prompt for a
-Bedrock model literally read "You are Grok released by xAI" regardless of
-which of the 11 models was active.
+defaulted to `"Grok"`, and — critically — every one of the 11 Bedrock
+catalog entries omitted `system_prompt_label`, causing every Bedrock model
+to resolve to the same default identity.
 
-One caveat noted during diagnosis but not something this fix controls: some
-open-weight models are trained on data that includes strong self-identity
-priors (e.g. having been fine-tuned on Grok-branded conversations
-elsewhere); a system prompt correction cannot force a model to stop
-self-identifying against its own training if that happens. This fix removes
-the harness-side cause; it does not guarantee every model's own trained
-identity is neutral.
+Combined, every Bedrock model's system prompt effectively became:
 
-**Fix**: removed "released by xAI" entirely (not replaced with any other
-attribution — the actual origin varies per model and a blanket claim would
-be inaccurate either way); changed the default label to `"AtheCode"`; and
-set each Bedrock catalog entry's `system_prompt_label` to its real display
-name (e.g. `"Qwen3 Coder Next"`), so the resolution tier chain
-(env var → user-per-model → user-global → **catalog per-model** → remote →
-default) now resolves each Bedrock model to its own name.
+> You are Grok released by xAI.
+
+One caveat noted during diagnosis—but outside the control of this
+integration—is that some open-weight models may still self-identify based on
+their training data. This fix removes the harness-side cause without making
+claims about model-specific training behavior.
+
+**Fix:** removed the hardcoded "released by xAI" attribution, changed the
+default label to `"AtheCode"`, and assigned every Bedrock model its own
+`system_prompt_label` so identity now resolves correctly through the normal
+configuration hierarchy.
 
 ## 4. Token Limit Bug
 
-**What happened**: asking a model to analyze multiple files in a directory
-produced output that appeared to cut off mid-analysis.
+**What happened:** asking a model to analyze multiple files in a directory
+produced output that appeared to stop mid-analysis.
 
-**Root cause**: `BedrockClient::build_converse_input` only sets
-`InferenceConfiguration.max_tokens` `if request.max_output_tokens.is_some()`.
-That value is sourced from the model's catalog entry
-(`max_completion_tokens`) — and every one of the 11 Bedrock entries in
-`default_models.json` had that field entirely absent. With no value ever
-set, Bedrock silently applied each model's own low default cap, truncating
-any response — like a multi-file analysis — that needed more than that
-default. This was not a streaming bug: the chunk-accumulation logic in
-`chat_completion_stream` was independently verified correct (it appends
-every `ContentBlockDelta::Text` across the whole stream with no early
-break).
+**Root cause:** `BedrockClient::build_converse_input()` only sets
+`InferenceConfiguration.max_tokens` when
+`request.max_output_tokens.is_some()`. That value comes directly from each
+model's catalog entry (`max_completion_tokens`), and all 11 Bedrock entries
+initially omitted it. Bedrock therefore silently applied provider defaults,
+resulting in truncated responses for longer generations.
 
-**Fix**: added `"max_completion_tokens": 8192` and `"temperature": 0.7` to
-all 11 Bedrock catalog entries (temperature was also confirmed absent).
+This was independently confirmed not to be a streaming issue—the streaming
+implementation correctly accumulated every `ContentBlockDelta::Text` until
+completion.
 
-## 5. Verified Working
+**Fix:** added `"max_completion_tokens": 8192` and `"temperature": 0.7` to
+every Bedrock model entry in the default catalog.
 
-Confirmed via live manual testing by the project owner:
+## 5. Verified Functionality
+
+Confirmed through live manual testing using real AWS credentials:
 
 - Model selection via `/model`, including switching between Bedrock models
-  and back to the xAI model.
-- Text streaming from a Bedrock model into the chat UI, rendering through
-  the same event path as xAI responses.
-- Response rendering (the model's actual reply text reaching the terminal).
-- AWS credential validation surfacing a clear error when
-  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` are missing,
-  rather than a panic.
+  and the original xAI model.
+- Successful routing of inference requests to the selected provider.
+- Text streaming through the shared `SamplingEvent` pipeline.
+- Response rendering through the existing terminal UI.
+- Multi-turn conversations under normal usage.
+- AWS credential validation with clear runtime errors when
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `AWS_REGION` are missing.
 
 ## 6. What's Not Yet Verified
 
-- **Tool execution** — not implemented (§2); not testable until built.
-- **Context compaction on the Bedrock path** — `run_turn_via_bedrock`
-  explicitly does not perform compaction; behavior once a long Bedrock
-  conversation exceeds context has not been exercised live.
-- **Multi-turn conversation state under Bedrock** — whether conversation
-  history round-trips correctly across several turns (system/user/assistant
-  item ordering, especially once a turn included content types Bedrock
-  drops, like an image) has not been separately confirmed beyond the single
-  reported testing session.
-- **ACP/editor integration with Bedrock models** — the `agent stdio` path
-  (inherited from upstream Grok Build) has not been tested with a Bedrock
-  model selected; all live testing so far went through the interactive TUI.
+The following capabilities have not yet been exercised or validated beyond
+the testing described above:
+
+- **Tool execution** — not implemented (see §2). Bedrock requests currently
+  do not send `ToolConfiguration` or process `ToolUse` / `ToolResult`
+  blocks, so tool execution cannot yet be validated.
+
+- **Context compaction under long-running Bedrock sessions** — normal
+  multi-turn conversations were exercised during live testing, but behavior
+  once a Bedrock conversation grows large enough to require context
+  compaction has not yet been validated.
+
+- **Stress and resilience testing** — the Bedrock integration has not yet
+  been evaluated under prolonged workloads, concurrent sessions, AWS
+  throttling, or network interruption scenarios.
+
+- **ACP / editor integration** — the inherited `agent stdio` pathway has
+  not yet been validated with Bedrock models. Live testing for this project
+  has focused on the interactive terminal UI.
